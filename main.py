@@ -25,6 +25,7 @@ fps = 60
 timer = pygame.time.Clock()
 WIDTH = 52 * 35
 HEIGHT = 400
+FADEOUT_TIME = 300 # Used for smoother stop
 screen = pygame.display.set_mode([WIDTH, HEIGHT])
 white_sounds = []
 black_sounds = []
@@ -138,10 +139,11 @@ def play_note_with_limiter(sound_to_play, velocity):
         channel.set_volume(final_volume)
         channel.play(sound_to_play)
         g_active_channels.append(channel)
+        return channel
         # print(len(g_active_channels))
     else:
         print("WARNING: No free channels, note dropped.")
-        pass
+        return None
 
 
 def draw_piano(whites, blacks):
@@ -166,7 +168,7 @@ def draw_piano(whites, blacks):
         )
         for q in range(len(blacks)):
             if blacks[q][0] == i:
-                if blacks[q][1] > 0:
+                if blacks[q][1] != 0:
                     pygame.draw.rect(
                         screen,
                         "green",
@@ -174,7 +176,8 @@ def draw_piano(whites, blacks):
                         2,
                         2,
                     )
-                    blacks[q][1] -= 1
+                    if blacks[q][1] > 0:
+                        blacks[q][1] -= 1
 
         key_label = real_small_font.render(black_labels[i], True, "white")
         screen.blit(key_label, (25 + (i * 35) + (skip_count * 35), HEIGHT - 120))
@@ -190,10 +193,11 @@ def draw_piano(whites, blacks):
             skip_count += 1
 
     for i in range(len(whites)):
-        if whites[i][1] > 0:
+        if whites[i][1] != 0:
             j = whites[i][0]
             pygame.draw.rect(screen, "green", [j * 35, HEIGHT - 100, 35, 100], 2, 2)
-            whites[i][1] -= 1
+            if whites[i][1] > 0:
+                whites[i][1] -= 1
 
     return white_rects, black_rects, whites, blacks
 
@@ -283,6 +287,7 @@ def draw_title_bar():
 
 run = True
 keys_pressed = set()
+active_keyboard_notes = {}
 while run:
     left_dict = {
         "Z": f"C{left_oct}",
@@ -356,13 +361,13 @@ while run:
 
         if event.type == pygame.MOUSEBUTTONDOWN:
             black_key = False
-            for i in range(len(black_keys)):
-                if black_keys[i].collidepoint(event.pos):
+            for i, key in enumerate(black_keys):
+                if key.collidepoint(event.pos):
                     play_note_with_limiter(black_sounds[i], 127)
                     black_key = True
                     active_blacks.append([i, 30])
-            for i in range(len(white_keys)):
-                if white_keys[i].collidepoint(event.pos) and not black_key:
+            for i, key in enumerate(white_keys):
+                if key.collidepoint(event.pos) and not black_key:
                     play_note_with_limiter(white_sounds[i], 127)
                     active_whites.append([i, 30])
 
@@ -370,29 +375,47 @@ while run:
             key = event.unicode.upper()
             if key not in keys_pressed:
                 keys_pressed.add(key)
-                if key in left_dict:
-                    if left_dict[key][1] == "#":
-                        index = black_labels.index(left_dict[key])
-                        play_note_with_limiter(black_sounds[index], 127)
-                        active_blacks.append([index, 30])
+                note_name = left_dict.get(key) or right_dict.get(key)
+
+                if note_name and note_name not in active_keyboard_notes:
+                    if "#" in note_name:
+                        index = black_labels.index(note_name)
+                        sound_to_play = black_sounds[index]
+                        channel = play_note_with_limiter(sound_to_play, 127)
+                        if channel:
+                            active_keyboard_notes[note_name] = channel
+                            active_blacks.append([index, -1])
                     else:
-                        index = white_notes.index(left_dict[key])
-                        play_note_with_limiter(white_sounds[index], 127)
-                        active_whites.append([index, 30])
-                if key in right_dict:
-                    if right_dict[key][1] == "#":
-                        index = black_labels.index(right_dict[key])
-                        play_note_with_limiter(black_sounds[index], 127)
-                        active_blacks.append([index, 30])
-                    else:
-                        index = white_notes.index(right_dict[key])
-                        play_note_with_limiter(white_sounds[index], 127)
-                        active_whites.append([index, 30])
+                        index = white_notes.index(note_name)
+                        sound_to_play = white_sounds[index]
+                        channel = play_note_with_limiter(sound_to_play, 127)
+                        if channel:
+                            active_keyboard_notes[note_name] = channel
+                            active_whites.append([index, -1])
 
         if event.type == pygame.KEYUP:
             key = event.unicode.upper()
             if key in keys_pressed:
                 keys_pressed.remove(key)
+
+            note_name = left_dict.get(key) or right_dict.get(key)
+
+            if note_name and note_name in active_keyboard_notes:
+                channel = active_keyboard_notes.pop(note_name)
+                channel.fadeout(FADEOUT_TIME)
+
+                if "#" in note_name:
+                    index = black_labels.index(note_name)
+                    for i, black in enumerate(active_blacks):
+                        if black[0] == index:
+                            active_blacks.pop(i)
+                            break
+                else:
+                    index = white_notes.index(note_name)
+                    for i, white in enumerate(active_whites):
+                        if white[0] == index:
+                            active_whites.pop(i)
+                            break
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_KP_0:
