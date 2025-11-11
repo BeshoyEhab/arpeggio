@@ -21,11 +21,11 @@ font = pygame.font.Font("assets/Terserah.ttf", 48)
 medium_font = pygame.font.Font("assets/Terserah.ttf", 28)
 small_font = pygame.font.Font("assets/Terserah.ttf", 16)
 real_small_font = pygame.font.Font("assets/Terserah.ttf", 10)
-fps = 60
+FPS = 60
 timer = pygame.time.Clock()
 WIDTH = 52 * 35
 HEIGHT = 400
-FADEOUT_TIME = 300 # Used for smoother stop
+FADEOUT_TIME = 300  # Used for smoother stop
 screen = pygame.display.set_mode([WIDTH, HEIGHT])
 white_sounds = []
 black_sounds = []
@@ -35,6 +35,7 @@ left_oct = 4
 right_oct = 5
 
 g_active_channels = []
+playback_active_channels = []
 
 playback_messages = []
 playback_start_time = 0
@@ -54,12 +55,12 @@ LIMITER_THRESHOLD = 16
 BASE_NOTE_VOLUME = 0.6
 
 
-for i in range(len(white_notes)):
-    sound = mixer.Sound(f"assets/notes/{white_notes[i]}.wav")
+for note in white_notes:
+    sound = mixer.Sound(f"assets/notes/{note}.wav")
     white_sounds.append(sound)
 
-for i in range(len(black_notes)):
-    sound = mixer.Sound(f"assets/notes/{black_notes[i]}.wav")
+for note in black_notes:
+    sound = mixer.Sound(f"assets/notes/{note}.wav")
     black_sounds.append(sound)
 
 pygame.display.set_caption("Arpeggio")
@@ -70,12 +71,12 @@ black_note_map = {note_name: index for index, note_name in enumerate(black_label
 
 
 def midi_to_note_name(midi_num):
-    if not (0 <= midi_num <= 127):
-        return None
-    octave = (midi_num // 12) - 1
-    note_index = midi_num % 12
-    note_name = NOTE_NAMES[note_index]
-    return f"{note_name}{octave}"
+    if 0 <= midi_num <= 127:
+        octave = (midi_num // 12) - 1
+        note_index = midi_num % 12
+        note_name = NOTE_NAMES[note_index]
+        return f"{note_name}{octave}"
+    return None
 
 
 def load_midi_file(filepath):
@@ -88,25 +89,50 @@ def load_midi_file(filepath):
 
     playback_messages = []
     current_time_sec = 0.0
+    active_notes = {}  # msg.note -> (start_time_sec, velocity)
 
     for msg in mid:
         current_time_sec += msg.time
-        if msg.type == "note_on" and msg.velocity > 0:
-            note_name = midi_to_note_name(msg.note)
-            velocity = msg.velocity
-            if note_name:
-                if note_name in black_note_map:
-                    index = black_note_map[note_name]
-                    note_type = "black"
-                    playback_messages.append(
-                        (current_time_sec * 1000, index, note_type, velocity)
-                    )
-                elif note_name in white_note_map:
-                    index = white_note_map[note_name]
-                    note_type = "white"
-                    playback_messages.append(
-                        (current_time_sec * 1000, index, note_type, velocity)
-                    )
+        if msg.type == "note_on":
+            if msg.velocity > 0:
+                active_notes[msg.note] = (current_time_sec, msg.velocity)
+            else:
+                # velocity 0 is note_off
+                if msg.note in active_notes:
+                    start_sec, velocity = active_notes.pop(msg.note)
+                    duration_sec = current_time_sec - start_sec
+                    start_ms = start_sec * 1000
+                    duration_ms = duration_sec * 1000
+                    note_name = midi_to_note_name(msg.note)
+                    if note_name:
+                        if note_name in black_note_map:
+                            index = black_note_map[note_name]
+                            note_type = "black"
+                        elif note_name in white_note_map:
+                            index = white_note_map[note_name]
+                            note_type = "white"
+                        else:
+                            continue
+                        playback_messages.append((start_ms, duration_ms, index, note_type, velocity))
+        elif msg.type == "note_off":
+            if msg.note in active_notes:
+                start_sec, velocity = active_notes.pop(msg.note)
+                duration_sec = current_time_sec - start_sec
+                start_ms = start_sec * 1000
+                duration_ms = duration_sec * 1000
+                note_name = midi_to_note_name(msg.note)
+                if note_name:
+                    if note_name in black_note_map:
+                        index = black_note_map[note_name]
+                        note_type = "black"
+                    elif note_name in white_note_map:
+                        index = white_note_map[note_name]
+                        note_type = "white"
+                    else:
+                        continue
+                    playback_messages.append((start_ms, duration_ms, index, note_type, velocity))
+
+    playback_messages.sort(key=lambda x: x[0])
     current_msg_index = 0
     playback_active = False
     print(f"Loaded {len(playback_messages)} notes from {filepath}")
@@ -202,69 +228,39 @@ def draw_piano(whites, blacks):
     return white_rects, black_rects, whites, blacks
 
 
-def draw_hands(rightOct, leftOct, rightHand, leftHand):
-    # left hand
-    pygame.draw.rect(
-        screen, "dark gray", [(leftOct * 245) - 175, HEIGHT - 60, 245, 30], 0, 4
-    )
-    pygame.draw.rect(
-        screen, "black", [(leftOct * 245) - 175, HEIGHT - 60, 245, 30], 4, 4
-    )
-    text = small_font.render(leftHand[0], True, "white")
-    screen.blit(text, ((leftOct * 245) - 165, HEIGHT - 55))
-    text = small_font.render(leftHand[2], True, "white")
-    screen.blit(text, ((leftOct * 245) - 130, HEIGHT - 55))
-    text = small_font.render(leftHand[4], True, "white")
-    screen.blit(text, ((leftOct * 245) - 95, HEIGHT - 55))
-    text = small_font.render(leftHand[5], True, "white")
-    screen.blit(text, ((leftOct * 245) - 60, HEIGHT - 55))
-    text = small_font.render(leftHand[7], True, "white")
-    screen.blit(text, ((leftOct * 245) - 25, HEIGHT - 55))
-    text = small_font.render(leftHand[9], True, "white")
-    screen.blit(text, ((leftOct * 245) + 10, HEIGHT - 55))
-    text = small_font.render(leftHand[11], True, "white")
-    screen.blit(text, ((leftOct * 245) + 45, HEIGHT - 55))
-    text = small_font.render(leftHand[1], True, "black")
-    screen.blit(text, ((leftOct * 245) - 148, HEIGHT - 55))
-    text = small_font.render(leftHand[3], True, "black")
-    screen.blit(text, ((leftOct * 245) - 113, HEIGHT - 55))
-    text = small_font.render(leftHand[6], True, "black")
-    screen.blit(text, ((leftOct * 245) - 43, HEIGHT - 55))
-    text = small_font.render(leftHand[8], True, "black")
-    screen.blit(text, ((leftOct * 245) - 8, HEIGHT - 55))
-    text = small_font.render(leftHand[10], True, "black")
-    screen.blit(text, ((leftOct * 245) + 27, HEIGHT - 55))
-    # right hand
-    pygame.draw.rect(
-        screen, "dark gray", [(rightOct * 245) - 175, HEIGHT - 60, 245, 30], 0, 4
-    )
-    pygame.draw.rect(
-        screen, "black", [(rightOct * 245) - 175, HEIGHT - 60, 245, 30], 4, 4
-    )
-    text = small_font.render(rightHand[0], True, "white")
-    screen.blit(text, ((rightOct * 245) - 165, HEIGHT - 55))
-    text = small_font.render(rightHand[2], True, "white")
-    screen.blit(text, ((rightOct * 245) - 130, HEIGHT - 55))
-    text = small_font.render(rightHand[4], True, "white")
-    screen.blit(text, ((rightOct * 245) - 95, HEIGHT - 55))
-    text = small_font.render(rightHand[5], True, "white")
-    screen.blit(text, ((rightOct * 245) - 60, HEIGHT - 55))
-    text = small_font.render(rightHand[7], True, "white")
-    screen.blit(text, ((rightOct * 245) - 25, HEIGHT - 55))
-    text = small_font.render(rightHand[9], True, "white")
-    screen.blit(text, ((rightOct * 245) + 10, HEIGHT - 55))
-    text = small_font.render(rightHand[11], True, "white")
-    screen.blit(text, ((rightOct * 245) + 45, HEIGHT - 55))
-    text = small_font.render(rightHand[1], True, "black")
-    screen.blit(text, ((rightOct * 245) - 148, HEIGHT - 55))
-    text = small_font.render(rightHand[3], True, "black")
-    screen.blit(text, ((rightOct * 245) - 113, HEIGHT - 55))
-    text = small_font.render(rightHand[6], True, "black")
-    screen.blit(text, ((rightOct * 245) - 43, HEIGHT - 55))
-    text = small_font.render(rightHand[8], True, "black")
-    screen.blit(text, ((rightOct * 245) - 8, HEIGHT - 55))
-    text = small_font.render(rightHand[10], True, "black")
-    screen.blit(text, ((rightOct * 245) + 27, HEIGHT - 55))
+def draw_hand(oct, hand):
+    base_x = oct * 245
+    rect_x = base_x - 175
+    pygame.draw.rect(screen, "dark gray", [rect_x, HEIGHT - 60, 245, 30], 0, 4)
+    pygame.draw.rect(screen, "black", [rect_x, HEIGHT - 60, 245, 30], 4, 4)
+    # White keys
+    white_positions = [
+        (base_x - 165, hand[0]),
+        (base_x - 130, hand[2]),
+        (base_x - 95, hand[4]),
+        (base_x - 60, hand[5]),
+        (base_x - 25, hand[7]),
+        (base_x + 10, hand[9]),
+        (base_x + 45, hand[11]),
+    ]
+    for x, note in white_positions:
+        text = small_font.render(note, True, "white")
+        screen.blit(text, (x, HEIGHT - 55))
+    # Black keys
+    black_positions = [
+        (base_x - 148, hand[1]),
+        (base_x - 113, hand[3]),
+        (base_x - 43, hand[6]),
+        (base_x - 8, hand[8]),
+        (base_x + 27, hand[10]),
+    ]
+    for x, note in black_positions:
+        text = small_font.render(note, True, "black")
+        screen.blit(text, (x, HEIGHT - 55))
+
+def draw_hands():
+    draw_hand(left_oct, left_hand)
+    draw_hand(right_oct, right_hand)
 
 
 def draw_title_bar():
@@ -317,19 +313,26 @@ while run:
         "0": f"A#{right_oct}",
         "P": f"B{right_oct}",
     }
-    timer.tick(fps)
+    timer.tick(FPS)
     screen.fill("gray")
 
     g_active_channels = [ch for ch in g_active_channels if ch.get_busy()]
+
+    now_ms = pygame.time.get_ticks() - playback_start_time
+
+    for ch, end_ms in list(playback_active_channels):
+        if now_ms >= end_ms - FADEOUT_TIME:
+            ch.fadeout(FADEOUT_TIME)
+            playback_active_channels.remove((ch, end_ms))
 
     if playback_active and current_msg_index < len(playback_messages):
         now_ms = pygame.time.get_ticks() - playback_start_time
 
         while current_msg_index < len(playback_messages):
-            msg_time_ms, index, note_type, velocity = playback_messages[
+            start_ms, duration_ms, index, note_type, velocity = playback_messages[
                 current_msg_index
             ]
-            if now_ms >= msg_time_ms:
+            if now_ms >= start_ms:
                 sound_to_play = None
                 if note_type == "black":
                     sound_to_play = black_sounds[index]
@@ -339,7 +342,10 @@ while run:
                     active_whites.append([index, 30])
 
                 if sound_to_play:
-                    play_note_with_limiter(sound_to_play, velocity)
+                    channel = play_note_with_limiter(sound_to_play, velocity)
+                    if channel:
+                        end_ms = start_ms + duration_ms
+                        playback_active_channels.append((channel, end_ms))
 
                 current_msg_index += 1
             else:
@@ -352,7 +358,7 @@ while run:
     white_keys, black_keys, active_whites, active_blacks = draw_piano(
         active_whites, active_blacks
     )
-    draw_hands(right_oct, left_oct, right_hand, left_hand)
+    draw_hands()
     draw_title_bar()
 
     for event in pygame.event.get():
