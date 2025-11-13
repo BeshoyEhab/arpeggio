@@ -3,6 +3,9 @@ from math import sqrt
 import mido
 import pygame
 from pygame import mixer
+import tkinter as tk
+from tkinter import filedialog
+from collections import deque
 
 import piano_lists as pl
 
@@ -15,7 +18,7 @@ pygame.mixer.pre_init(
 
 pygame.init()
 
-pygame.mixer.set_num_channels(512)
+pygame.mixer.set_num_channels(2048)
 
 font = pygame.font.Font("assets/Terserah.ttf", 48)
 medium_font = pygame.font.Font("assets/Terserah.ttf", 28)
@@ -24,7 +27,7 @@ real_small_font = pygame.font.Font("assets/Terserah.ttf", 10)
 FPS = 60
 timer = pygame.time.Clock()
 WIDTH = 52 * 35
-HEIGHT = 400
+HEIGHT = 550
 FADEOUT_TIME = 300  # Used for smoother stop
 screen = pygame.display.set_mode([WIDTH, HEIGHT])
 white_sounds = []
@@ -34,8 +37,15 @@ active_blacks = []
 left_oct = 4
 right_oct = 5
 
+key_press_times = deque(maxlen=2)
+
+
 g_active_channels = []
 playback_active_channels = []
+
+sustain_pedal_down = False
+sustained_notes = []
+
 
 playback_messages = []
 playback_start_time = 0
@@ -54,6 +64,10 @@ black_labels = pl.black_labels
 LIMITER_THRESHOLD = 16
 BASE_NOTE_VOLUME = 0.6
 
+WHITE_NOTE_COLOR = (0, 255, 255)  # Cyan
+BLACK_NOTE_COLOR = (255, 0, 255)  # Magenta
+
+
 
 for note in white_notes:
     sound = mixer.Sound(f"assets/notes/{note}.wav")
@@ -64,6 +78,9 @@ for note in black_notes:
     black_sounds.append(sound)
 
 pygame.display.set_caption("Arpeggio")
+
+root = tk.Tk()
+root.withdraw()  # Hides the small root window
 
 
 white_note_map = {note_name: index for index, note_name in enumerate(white_notes)}
@@ -172,6 +189,45 @@ def play_note_with_limiter(sound_to_play, velocity):
         return None
 
 
+def draw_falling_notes(now_ms):
+    # Look ahead in the playback messages (e.g., 4 seconds)
+    look_ahead_ms = 4000
+    visible_notes = []
+    for i in range(current_msg_index, len(playback_messages)):
+        start_ms, duration_ms, index, note_type, velocity = playback_messages[i]
+        if start_ms > now_ms + look_ahead_ms:
+            break  # Stop if the note is too far in the future
+        if start_ms >= now_ms:
+            visible_notes.append(playback_messages[i])
+
+    for start_ms, duration_ms, index, note_type, velocity in visible_notes:
+        time_to_impact = start_ms - now_ms
+        # Calculate Y position based on time to impact
+        # The note should be at the top of the piano (y=100) when time_to_impact is look_ahead_ms
+        # and at the bottom (y=HEIGHT-300) when time_to_impact is 0
+        y_pos = 100 + ((look_ahead_ms - time_to_impact) / look_ahead_ms) * (
+            HEIGHT - 400
+        )
+
+        # Calculate X position and width
+        if note_type == "white":
+            x_pos = index * 35
+            width = 25
+            color = WHITE_NOTE_COLOR
+        else:  # black
+            # This requires a more complex mapping from black note index to screen position
+            # For now, a simplified calculation:
+            skip_count = (index // 5) * 2 + ((index % 5) > 1) + ((index % 5) > 3)
+            x_pos = 23 + (index * 35) + (skip_count * 35)
+            width = 24
+            color = BLACK_NOTE_COLOR
+
+        # Height is proportional to duration
+        height = (duration_ms / 1000) * 50  # 50 pixels per second of duration
+
+        pygame.draw.rect(screen, color, [x_pos, y_pos, width, height])
+
+
 def draw_piano(whites, blacks):
     white_rects = []
     for i in range(52):
@@ -218,14 +274,31 @@ def draw_piano(whites, blacks):
             skip_track = 0
             skip_count += 1
 
+    next_whites = []
     for i in range(len(whites)):
-        if whites[i][1] != 0:
+        if whites[i][1] > 0:
             j = whites[i][0]
             pygame.draw.rect(screen, "green", [j * 35, HEIGHT - 100, 35, 100], 2, 2)
+            whites[i][1] -= 1
             if whites[i][1] > 0:
-                whites[i][1] -= 1
+                next_whites.append(whites[i])
 
-    return white_rects, black_rects, whites, blacks
+    next_blacks = []
+    for i in range(len(blacks)):
+        if blacks[i][1] > 0:
+            j = blacks[i][0]
+            pygame.draw.rect(
+                screen,
+                "green",
+                [23 + (j * 35) + (skip_count * 35), HEIGHT - 300, 24, 200],
+                2,
+                2,
+            )
+            blacks[i][1] -= 1
+            if blacks[i][1] > 0:
+                next_blacks.append(blacks[i])
+
+    return white_rects, black_rects, next_whites, next_blacks
 
 
 def draw_hand(oct, hand):
@@ -272,6 +345,8 @@ def draw_title_bar():
         "Left/Right Arrows Change Right Hand", True, "black"
     )
     screen.blit(instruction_text2, (WIDTH - 500, 50))
+    instruction_text3 = medium_font.render("L to Load MIDI, S to Stop", True, "black")
+    screen.blit(instruction_text3, (WIDTH - 500, 90))
     img = pygame.transform.scale(pygame.image.load("assets/logo.png"), [150, 150])
     screen.blit(img, (0, -34))
     title_text = font.render("A Project of the Resonance Committee.", True, "white")
@@ -355,6 +430,9 @@ while run:
             print("Playback finished.")
             playback_active = False
 
+    if playback_active:
+        draw_falling_notes(now_ms)
+
     white_keys, black_keys, active_whites, active_blacks = draw_piano(
         active_whites, active_blacks
     )
@@ -365,16 +443,34 @@ while run:
         if event.type == pygame.QUIT:
             run = False
 
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_SPACE:
+                sustain_pedal_down = True
+
+        if event.type == pygame.KEYUP:
+            if event.key == pygame.K_SPACE:
+                sustain_pedal_down = False
+        # When the pedal is released, stop all sustained notes
+        for channel in sustained_notes:
+            channel.stop()
+        sustained_notes.clear()
+
         if event.type == pygame.MOUSEBUTTONDOWN:
             black_key = False
             for i, key in enumerate(black_keys):
                 if key.collidepoint(event.pos):
-                    play_note_with_limiter(black_sounds[i], 127)
+                    # Y-position relative to the key
+                    relative_y = event.pos[1] - key.y
+                    # Normalize to a 0-1 range, then scale to 0-127
+                    velocity = int((relative_y / key.height) * 127)
+                    play_note_with_limiter(black_sounds[i], velocity)
                     black_key = True
                     active_blacks.append([i, 30])
             for i, key in enumerate(white_keys):
                 if key.collidepoint(event.pos) and not black_key:
-                    play_note_with_limiter(white_sounds[i], 127)
+                    relative_y = event.pos[1] - key.y
+                    velocity = int((relative_y / key.height) * 127)
+                    play_note_with_limiter(white_sounds[i], velocity)
                     active_whites.append([i, 30])
 
         if event.type == pygame.KEYDOWN:
@@ -384,20 +480,44 @@ while run:
                 note_name = left_dict.get(key) or right_dict.get(key)
 
                 if note_name and note_name not in active_keyboard_notes:
+                    # --- New velocity logic ---
+                    now = pygame.time.get_ticks()
+                    velocity = 90  # Default for the very first note
+                    if key_press_times:
+                        diff = now - key_press_times[-1]
+                        min_diff = 50
+                        max_diff = 400
+                        min_vel = 70
+                        max_vel = 127
+                        if diff <= min_diff:
+                            velocity = max_vel
+                        elif diff >= max_diff:
+                            velocity = min_vel
+                        else:
+                            velocity = int(
+                                max_vel
+                                - ((diff - min_diff) / (max_diff - min_diff))
+                                * (max_vel - min_vel)
+                            )
+                    key_press_times.append(now)
+                    # --- End of new logic ---
+
                     if "#" in note_name:
                         index = black_labels.index(note_name)
                         sound_to_play = black_sounds[index]
-                        channel = play_note_with_limiter(sound_to_play, 127)
+                        channel = play_note_with_limiter(sound_to_play, velocity)
                         if channel:
                             active_keyboard_notes[note_name] = channel
-                            active_blacks.append([index, -1])
+                            if not sustain_pedal_down:
+                                active_blacks.append([index, -1])
                     else:
                         index = white_notes.index(note_name)
                         sound_to_play = white_sounds[index]
-                        channel = play_note_with_limiter(sound_to_play, 127)
+                        channel = play_note_with_limiter(sound_to_play, velocity)
                         if channel:
                             active_keyboard_notes[note_name] = channel
-                            active_whites.append([index, -1])
+                            if not sustain_pedal_down:
+                                active_whites.append([index, -1])
 
         if event.type == pygame.KEYUP:
             key = event.unicode.upper()
@@ -408,7 +528,10 @@ while run:
 
             if note_name and note_name in active_keyboard_notes:
                 channel = active_keyboard_notes.pop(note_name)
-                channel.fadeout(FADEOUT_TIME)
+                if sustain_pedal_down:
+                    sustained_notes.append(channel)
+                else:
+                    channel.fadeout(FADEOUT_TIME)
 
                 if "#" in note_name:
                     index = black_labels.index(note_name)
@@ -424,17 +547,27 @@ while run:
                             break
 
         if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_KP_0:
-                midi_file_path = (
-                    "assets/MIDI/Thomas_Bergersen_-_Made_of_Air_(2_Pianos).mid"
+            if event.key == pygame.K_l:
+                # Open file dialog
+                midi_file_path = filedialog.askopenfilename(
+                    initialdir="assets/MIDI/",
+                    title="Select a MIDI File",
+                    filetypes=(("MIDI Files", "*.mid"), ("All files", "*.*")),
                 )
-                if load_midi_file(midi_file_path):
-                    print("Starting playback...")
-                    playback_active = True
-                    playback_start_time = pygame.time.get_ticks()
-                    current_msg_index = 0
-                else:
-                    print(f"Could not play {midi_file_path}")
+                if midi_file_path:  # If a file was selected
+                    if load_midi_file(midi_file_path):
+                        print("Starting playback...")
+                        playback_active = True
+                        playback_start_time = pygame.time.get_ticks()
+                        current_msg_index = 0
+                    else:
+                        print(f"Could not play {midi_file_path}")
+
+            if event.key == pygame.K_s:
+                playback_active = False
+                for channel, end_ms in playback_active_channels:
+                    channel.fadeout(FADEOUT_TIME)
+                playback_active_channels.clear()
 
             if event.key == pygame.K_RIGHT:
                 if right_oct < 8:
