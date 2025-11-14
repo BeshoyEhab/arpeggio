@@ -13,7 +13,7 @@ pygame.mixer.pre_init(
     frequency=44100,  # Standard sample rate
     size=-16,  # 16-bit audio
     channels=2,  # Stereo
-    buffer=2048,
+    buffer=1024,  # Smaller buffer for lower latency
 )
 
 pygame.init()
@@ -61,8 +61,8 @@ black_notes = pl.black_notes
 black_labels = pl.black_labels
 
 
-LIMITER_THRESHOLD = 16
-BASE_NOTE_VOLUME = 0.6
+LIMITER_THRESHOLD = 32
+BASE_NOTE_VOLUME = 0.4
 
 WHITE_NOTE_COLOR = (0, 255, 255)  # Cyan
 BLACK_NOTE_COLOR = (255, 0, 255)  # Magenta
@@ -211,19 +211,22 @@ def draw_falling_notes(now_ms):
 
         # Calculate X position and width
         if note_type == "white":
-            x_pos = index * 35
-            width = 25
+            x_pos = index * 35 + 7.5  # Center the narrower note in the 35px key
+            width = 20
             color = WHITE_NOTE_COLOR
         else:  # black
-            # This requires a more complex mapping from black note index to screen position
-            # For now, a simplified calculation:
-            skip_count = (index // 5) * 2 + ((index % 5) > 1) + ((index % 5) > 3)
-            x_pos = 23 + (index * 35) + (skip_count * 35)
-            width = 24
+            # Use pre-calculated positions matching the piano key layout
+            black_x_positions = [
+                23,93,163,198,233,303,338,408,443,478,548,583,653,688,723,
+                793,828,898,933,968,1038,1073,1143,1178,1213,1283,1318,1388,1423,1458,
+                1528,1563,1633,1668,1703,1773
+            ]
+            x_pos = black_x_positions[index] + 2  # Center the 20px note in the 24px key
+            width = 20
             color = BLACK_NOTE_COLOR
 
-        # Height is proportional to duration
-        height = (duration_ms / 1000) * 50  # 50 pixels per second of duration
+        # Height is proportional to duration, minimum 1px for very short notes
+        height = max(1, (duration_ms / 1000) * 50)  # 50 pixels per second of duration
 
         pygame.draw.rect(screen, color, [x_pos, y_pos, width, height])
 
@@ -284,13 +287,18 @@ def draw_piano(whites, blacks):
                 next_whites.append(whites[i])
 
     next_blacks = []
+    black_x_positions = [
+        23,93,163,198,233,303,338,408,443,478,548,583,653,688,723,
+        793,828,898,933,968,1038,1073,1143,1178,1213,1283,1318,1388,1423,1458,
+        1528,1563,1633,1668,1703,1773
+    ]
     for i in range(len(blacks)):
         if blacks[i][1] > 0:
             j = blacks[i][0]
             pygame.draw.rect(
                 screen,
                 "green",
-                [23 + (j * 35) + (skip_count * 35), HEIGHT - 300, 24, 200],
+                [black_x_positions[j], HEIGHT - 300, 24, 200],
                 2,
                 2,
             )
@@ -502,6 +510,17 @@ while run:
                     key_press_times.append(now)
                     # --- End of new logic ---
 
+                    # If key already active, stop it and remove highlights
+                    if note_name in active_keyboard_notes:
+                        old_channel = active_keyboard_notes.pop(note_name)
+                        old_channel.stop()
+                        if "#" in note_name:
+                            index = black_labels.index(note_name)
+                            active_blacks = [b for b in active_blacks if b[0] != index]
+                        else:
+                            index = white_notes.index(note_name)
+                            active_whites = [w for w in active_whites if w[0] != index]
+
                     if "#" in note_name:
                         index = black_labels.index(note_name)
                         sound_to_play = black_sounds[index]
@@ -509,7 +528,7 @@ while run:
                         if channel:
                             active_keyboard_notes[note_name] = channel
                             if not sustain_pedal_down:
-                                active_blacks.append([index, -1])
+                                active_blacks.append([index, 30])
                     else:
                         index = white_notes.index(note_name)
                         sound_to_play = white_sounds[index]
@@ -517,7 +536,7 @@ while run:
                         if channel:
                             active_keyboard_notes[note_name] = channel
                             if not sustain_pedal_down:
-                                active_whites.append([index, -1])
+                                active_whites.append([index, 30])
 
         if event.type == pygame.KEYUP:
             key = event.unicode.upper()
